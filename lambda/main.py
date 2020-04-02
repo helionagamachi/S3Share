@@ -1,7 +1,7 @@
 import jwt
 from datetime import datetime, timedelta
 
-key = "Temporary key, needs to be replaced"
+key = "#KEY_TO_BE_REPLACED#"
 
 def handler(event, context):
 

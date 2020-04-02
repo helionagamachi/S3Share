@@ -14,20 +14,46 @@ from aws_cdk.aws_iam import ServicePrincipal, PolicyStatement
 
 from os import environ
 from pathlib import Path
+import tempfile, shutil, string, random, os
 
 class S3ShareStack(core.Stack):
 
     def init_lambda(self):
-        # need to code replacement for the key, and dependecies setup...
-        asset_path = Path(__file__).parent.joinpath("..", "lambda")
+
+        tmp_dir = Path(tempfile.mkdtemp())
+        origin_dir = Path(__file__).parent.parent.joinpath("lambda")
+
+        shutil.copy(origin_dir.joinpath("requirements.txt"), tmp_dir)
+
+        random_key = ''.join(
+            random.choices(string.printable, k=30)
+        ).replace('"', "").replace("\\", "")
+
+        key = environ.get("JWT_KEY", random_key)
+
+        with open(tmp_dir.joinpath("main.py"), "w") as dest:
+            with open (origin_dir.joinpath("main.py")) as original:
+                for l in original:
+                    dest.write(l.replace("#KEY_TO_BE_REPLACED#", key))
+
+        # Installing the dependencies, maybe could be done better?
+        os.chdir(tmp_dir)
+        os.system("pip install -r requirements.txt --target .")
+
         lambda_code = Code.from_asset(
-            str(asset_path.absolute()),
-            exclude=[".env", "__main*", "*.dist-info", "bin"]
+            str(tmp_dir),
+            exclude=[
+                ".env",
+                "__main*",
+                "*.dist-info",
+                "bin",
+                "requirements.txt",
+            ]
         )
 
         checker_lambda = Function(
             self,
-            "checker",
+            "lambda",
             code=lambda_code,
             handler="main.handler",
             runtime=Runtime.PYTHON_3_8
