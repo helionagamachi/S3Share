@@ -9,9 +9,12 @@ from pathlib import Path
 
 from aws_cdk import core
 
+from aws_cdk.aws_certificatemanager import Certificate, ValidationMethod
+
 from aws_cdk.aws_cloudfront import (
     CloudFrontWebDistribution, S3OriginConfig, SourceConfiguration, Behavior,
-    OriginAccessIdentity, LambdaFunctionAssociation, LambdaEdgeEventType
+    OriginAccessIdentity, LambdaFunctionAssociation, LambdaEdgeEventType,
+    SecurityPolicyProtocol, ViewerCertificate, 
 )
 
 from aws_cdk.aws_s3 import Bucket, BlockPublicAccess
@@ -22,42 +25,6 @@ from aws_cdk.aws_iam import ServicePrincipal, PolicyStatement
 
 
 class S3ShareStack(core.Stack):
-
-    def init_lambda(self):
-
-        tmp_dir = install_lambda_code_requirements()
-
-        lambda_code = Code.from_asset(
-            str(tmp_dir),
-            exclude=[
-                ".env",
-                "__main*",
-                "*.dist-info",
-                "bin",
-                "requirements.txt",
-            ]
-        )
-
-        lambda_function = Function(
-            self,
-            "lambda",
-            code=lambda_code,
-            handler="main.handler",
-            runtime=Runtime.PYTHON_3_8
-        )
-
-        lambda_function.role.assume_role_policy.add_statements(
-            PolicyStatement(
-                actions=["sts:AssumeRole"],
-                principals=[ServicePrincipal("edgelambda.amazonaws.com")]
-            )
-        )
-
-        version = Version(self, "version", lambda_=lambda_function)
-
-        apply_removal_policy(lambda_function, version, lambda_function.role)
-
-        return version
 
     def __init__(self, scope: core.Construct, id: str, **kwargs) -> None:
         super().__init__(scope, id, **kwargs)
@@ -99,13 +66,70 @@ class S3ShareStack(core.Stack):
             behaviors=[default_behavior],
         )
 
+        cert = None
+        domain_name = environ.get("DOMAIN_NAME", None)
+
+        if domain_name is not None:
+            cert = ViewerCertificate.from_acm_certificate(
+                self.init_certificate(domain_name),
+                aliases=[domain_name],
+                security_policy=SecurityPolicyProtocol.TLS_V1_2_2018
+            )
+
+
         distribution = CloudFrontWebDistribution(
             self,
             "CloudFront",
             origin_configs=[
                 source_config,
             ],
+            viewer_certificate=cert
         )
+
+    def init_lambda(self):
+
+        tmp_dir = install_lambda_code_requirements()
+
+        lambda_code = Code.from_asset(
+            str(tmp_dir),
+            exclude=[
+                ".env",
+                "__main*",
+                "*.dist-info",
+                "bin",
+                "requirements.txt",
+            ]
+        )
+
+        lambda_function = Function(
+            self,
+            "lambda",
+            code=lambda_code,
+            handler="main.handler",
+            runtime=Runtime.PYTHON_3_8
+        )
+
+        lambda_function.role.assume_role_policy.add_statements(
+            PolicyStatement(
+                actions=["sts:AssumeRole"],
+                principals=[ServicePrincipal("edgelambda.amazonaws.com")]
+            )
+        )
+
+        version = Version(self, "version", lambda_=lambda_function)
+
+        apply_removal_policy(lambda_function, version, lambda_function.role)
+
+        return version
+
+    def init_certificate(self, domain_name):
+        certificate = Certificate(
+            self,
+            "certificate",
+            domain_name=domain_name,
+            validation_method=ValidationMethod.DNS
+        )
+        return certificate
 
 def apply_removal_policy(*args):
     for el in args:
@@ -119,7 +143,10 @@ def install_lambda_code_requirements():
     shutil.copy(origin_dir.joinpath("requirements.txt"), tmp_dir)
 
     random_key = ''.join(
-        random.choices(string.printable, k=30)
+        random.choices(
+            string.ascii_letters + string.digits + string.punctuation,
+            k=30
+        )
     ).replace('"', "").replace("\\", "")
 
     key = environ.get("JWT_KEY", random_key)
